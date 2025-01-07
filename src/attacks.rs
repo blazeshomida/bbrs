@@ -1,4 +1,4 @@
-use std::{time::Instant, vec};
+use std::{array, time::Instant, vec};
 
 use crate::magic::MagicPRNG;
 
@@ -296,23 +296,23 @@ fn mask_king_attacks(square: u8) -> u64 {
     mask_leaper_attacks(square, &KING_OFFSETS)
 }
 
-/// Generates line attacks using the Hyperbola Quintessence formula:
+/// Generates slider attacks using the Hyperbola Quintessence formula:
 /// (o - 2s) ^ reverse_bits( reverse_bits(o) - 2 * reverse_bits(s) ).
-fn generate_line_attacks(square: u8, line_mask: u64, occupancy: u64) -> u64 {
+fn generate_slider_attacks(square: u8, slider_mask: u64, occupancy: u64) -> u64 {
     let s = bitboard!(square);
 
-    let mut forward = occupancy & line_mask;
+    let mut forward = occupancy & slider_mask;
     let mut reverse = forward.reverse_bits();
 
     forward = forward.wrapping_sub(s << 1);
     reverse = reverse.wrapping_sub(s.reverse_bits() << 1);
 
     forward ^= reverse.reverse_bits();
-    forward & line_mask
+    forward & slider_mask
 }
 
-fn mask_slider_attacks(square: u8, line_mask: u64) -> u64 {
-    generate_line_attacks(square, line_mask, 0)
+fn mask_slider_attacks(square: u8, slider_mask: u64) -> u64 {
+    generate_slider_attacks(square, slider_mask, 0)
 }
 
 fn mask_bishop_attacks(square: u8) -> u64 {
@@ -338,11 +338,11 @@ fn generate_bishop_attacks(square: u8, occupancy: u64) -> u64 {
     let (rank, file) = (square >> 3, square & 7);
 
     // Just call the line-attack helper for each relevant mask
-    generate_line_attacks(
+    generate_slider_attacks(
         square,
         DIAGONAL_MASKS[(7 - rank + file) as usize],
         occupancy,
-    ) | generate_line_attacks(
+    ) | generate_slider_attacks(
         square,
         ANTI_DIAGONAL_MASKS[(rank + file) as usize],
         occupancy,
@@ -352,8 +352,8 @@ fn generate_bishop_attacks(square: u8, occupancy: u64) -> u64 {
 /// Generates rook attacks by combining rank and file lines.
 fn generate_rook_attacks(square: u8, occupancy: u64) -> u64 {
     // Use the same line-attack helper for rank and file
-    generate_line_attacks(square, RANK_MASKS[(square >> 3) as usize], occupancy)
-        | generate_line_attacks(square, FILE_MASKS[(square & 7) as usize], occupancy)
+    generate_slider_attacks(square, RANK_MASKS[(square >> 3) as usize], occupancy)
+        | generate_slider_attacks(square, FILE_MASKS[(square & 7) as usize], occupancy)
 }
 
 fn create_occupancy(index: usize, mask: u64, bits: u8) -> u64 {
@@ -368,6 +368,30 @@ fn create_occupancy(index: usize, mask: u64, bits: u8) -> u64 {
     })
 }
 
+fn init_slider_attacks(masks: [u64; 64], is_bishop: bool) -> [Box<[u64]>; 64] {
+    array::from_fn(|square| {
+        let mask = masks[square];
+        let (magic, bits) = if is_bishop {
+            (BISHOP_MAGICS[square], BISHOP_RELEVANT_BITS[square])
+        } else {
+            (ROOK_MAGICS[square], ROOK_RELEVANT_BITS[square])
+        };
+        let variations = 1 << bits;
+        let mut attacks = vec![0; variations];
+        (0..variations).for_each(|index| {
+            let occupancy = create_occupancy(index, mask, bits);
+            let magic_index = ((occupancy.wrapping_mul(magic)) >> (64 - bits)) as usize;
+            attacks[magic_index] = if is_bishop {
+                generate_bishop_attacks(square as u8, occupancy)
+            } else {
+                generate_rook_attacks(square as u8, occupancy)
+            };
+        });
+        attacks.into()
+    })
+}
+
+#[allow(dead_code)]
 fn find_magic_number(rng: &mut MagicPRNG, square: u8, is_bishop: bool) -> Result<u64, &str> {
     let (mask, bits) = if is_bishop {
         (
@@ -420,6 +444,7 @@ fn find_magic_number(rng: &mut MagicPRNG, square: u8, is_bishop: bool) -> Result
     Err("failed to find magic number")
 }
 
+#[allow(dead_code)]
 fn find_magic_numbers() {
     let mut rng = MagicPRNG::new();
     let now = Instant::now();
@@ -441,6 +466,84 @@ pub struct AttackTable {
     kings: [u64; 64],
     bishops: [Box<[u64]>; 64],
     rooks: [Box<[u64]>; 64],
+
+    bishop_masks: [u64; 64],
+    rook_masks: [u64; 64],
+}
+
+impl AttackTable {
+    pub fn init() -> Self {
+        let mut pawns = [[0; 64]; 2];
+        let mut knights = [0; 64];
+        let mut kings = [0; 64];
+        let mut bishop_masks = [0; 64];
+        let mut rook_masks = [0; 64];
+
+        // Initialize attack masks
+        (0..64).for_each(|square| {
+            pawns[0][square] = mask_pawn_attacks(square as u8, 0);
+            pawns[1][square] = mask_pawn_attacks(square as u8, 1);
+            knights[square] = mask_knight_attacks(square as u8);
+            kings[square] = mask_king_attacks(square as u8);
+            bishop_masks[square] = mask_bishop_attacks(square as u8);
+            rook_masks[square] = mask_rook_attacks(square as u8);
+        });
+
+        // Initialize bishop and rook attack tables
+        let bishops: [Box<[u64]>; 64] = init_slider_attacks(bishop_masks, true);
+        let rooks: [Box<[u64]>; 64] = init_slider_attacks(rook_masks, false);
+
+        AttackTable {
+            pawns,
+            knights,
+            kings,
+            bishops,
+            rooks,
+            bishop_masks,
+            rook_masks,
+        }
+    }
+
+    fn get_slider_attacks(&self, square: usize, occupancy: u64, is_bishop: bool) -> u64 {
+        let (mask, magic, bits) = if is_bishop {
+            (
+                self.bishop_masks[square],
+                BISHOP_MAGICS[square],
+                BISHOP_RELEVANT_BITS[square],
+            )
+        } else {
+            (
+                self.rook_masks[square],
+                ROOK_MAGICS[square],
+                ROOK_RELEVANT_BITS[square],
+            )
+        };
+        let magic_index = ((occupancy & mask).wrapping_mul(magic) >> (64 - bits)) as usize;
+        if is_bishop {
+            self.bishops[square][magic_index]
+        } else {
+            self.rooks[square][magic_index]
+        }
+    }
+
+    pub fn get_pawn_attacks(&self, side: u8, square: usize) -> u64 {
+        self.pawns[side as usize][square]
+    }
+    pub fn get_knight_attacks(&self, square: usize) -> u64 {
+        self.knights[square]
+    }
+    pub fn get_king_attacks(&self, square: usize) -> u64 {
+        self.kings[square]
+    }
+    pub fn get_bishop_attacks(&self, square: usize, occupancy: u64) -> u64 {
+        self.get_slider_attacks(square, occupancy, true)
+    }
+    pub fn get_rook_attacks(&self, square: usize, occupancy: u64) -> u64 {
+        self.get_slider_attacks(square, occupancy, false)
+    }
+    pub fn get_queen_attacks(&self, square: usize, occupancy: u64) -> u64 {
+        self.get_bishop_attacks(square, occupancy) | self.get_rook_attacks(square, occupancy)
+    }
 }
 
 #[cfg(test)]
