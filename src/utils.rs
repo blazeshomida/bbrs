@@ -1,3 +1,5 @@
+use std::io::{self, Read};
+
 /// Print the bitboard for debugging.
 pub fn print_bitboard(bitboard: u64) {
     let divider = "-------------------";
@@ -21,4 +23,15 @@ pub fn print_bitboard(bitboard: u64) {
     println!("Hex: {:#X}", bitboard);
     println!("Binary: {:#b}", bitboard);
     println!("{}", divider);
+}
+
+/// Pauses execution until any key is pressed.
+pub fn pause() {
+    println!("Press any key to continue...");
+
+    // Create a buffer to hold one byte
+    let mut buffer = [0; 1];
+
+    // Read one byte from standard input to pause execution
+    io::stdin().read_exact(&mut buffer).unwrap();
 }
