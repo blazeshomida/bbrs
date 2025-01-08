@@ -1,4 +1,10 @@
-use std::io::{self, Read};
+use std::{
+    io::{self, Read},
+    thread,
+    time::Duration,
+};
+
+use crate::engine::piece::pieces::ASCII_PIECES;
 
 /// Print the bitboard for debugging.
 pub fn print_bitboard(bitboard: u64) {
@@ -25,6 +31,60 @@ pub fn print_bitboard(bitboard: u64) {
     println!("{}", divider);
 }
 
+pub fn format_move(move_: u32) -> String {
+    let (source, target, _, promotion, _) = decode_move!(move_);
+    let suffix = if promotion != 0 {
+        format!("={}", ASCII_PIECES[promotion as usize])
+    } else {
+        String::new()
+    };
+
+    format!(
+        "{}{}{}",
+        index_to_algebraic(source as usize),
+        index_to_algebraic(target as usize),
+        suffix
+    )
+}
+
+pub fn print_move_list(moves: &[u32]) {
+    let print_divider = || {
+        println!("{}", "─".repeat(65));
+    };
+    let print_headers = || {
+        println!(
+            "{:>5} │ {:<6} │ {:^7} │ {:^7} │ {:^7} │ {:^7} │ {:^7}",
+            "No.", "Move", "Piece", "Capt.", "Doub.", "En Pas.", "Castle"
+        );
+    };
+    print_divider();
+    println!("  Move list:");
+    print_divider();
+    print_headers();
+    print_divider();
+
+    moves.iter().enumerate().for_each(|(index, &move_)| {
+        let (_, _, piece, _, (capture, double, en_passant, castle)) = decode_move!(move_);
+        print!("{:>5} │ ", format!("{:>3}", index + 1));
+
+        print!(
+            "{:<6} │ {:^7} │ {:^7} │ {:^7} │ {:^7} │ {:^7}",
+            format_move(move_),
+            ASCII_PIECES[piece as usize],
+            if capture { "■■■" } else { "‧‧‧" },
+            if double { "■■■" } else { "‧‧‧" },
+            if en_passant { "■■■" } else { "‧‧‧" },
+            if castle { "■■■" } else { "‧‧‧" }
+        );
+        println!();
+    });
+    print_divider();
+    print_headers();
+    print_divider();
+    println!("  Total moves: {}", moves.len());
+    print_divider();
+}
+
 /// Convert an algebraic square (e.g., "a8") to a bitboard index (0-63).
 pub fn algebraic_to_index(square: &str) -> u8 {
     let mut chars = square.chars();
@@ -49,4 +109,9 @@ pub fn pause() {
 
     // Read one byte from standard input to pause execution
     io::stdin().read_exact(&mut buffer).unwrap();
+}
+
+/// Sleeps for a specified number of milliseconds.
+pub fn sleep(ms: u64) {
+    thread::sleep(Duration::from_millis(ms));
 }

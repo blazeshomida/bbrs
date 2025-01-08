@@ -1,9 +1,9 @@
-use std::{cell::RefCell, ops::Range};
+use std::{ops::Range, time::Instant};
 
 use crate::{
     attacks::{masks, AttackTable},
     consts::Square,
-    utils::index_to_algebraic,
+    utils::{format_move, index_to_algebraic, pause, print_move_list},
 };
 use moves::{MOVE_CAPTURE, MOVE_CASTLE, MOVE_DOUBLE, MOVE_EN_PASSANT};
 use piece::{pieces::*, range};
@@ -33,7 +33,7 @@ mod side {
     }
 }
 
-mod piece {
+pub mod piece {
     pub mod types {
         pub const PAWN: u8 = 0;
         pub const KNIGHT: u8 = 1;
@@ -75,6 +75,17 @@ mod castling {
     pub const WQ: u8 = 1 << 1;
     pub const BK: u8 = 1 << 2;
     pub const BQ: u8 = 1 << 3;
+    #[rustfmt::skip]
+    pub const CASLTING_RIGHTS: [u8; 64] = [
+         7, 15, 15, 15,  3, 15, 15, 11, 
+        15, 15, 15, 15, 15, 15, 15, 15, 
+        15, 15, 15, 15, 15, 15, 15, 15, 
+        15, 15, 15, 15, 15, 15, 15, 15, 
+        15, 15, 15, 15, 15, 15, 15, 15, 
+        15, 15, 15, 15, 15, 15, 15, 15, 
+        15, 15, 15, 15, 15, 15, 15, 15, 
+        13, 15, 15, 15, 12, 15, 15, 14,
+    ];
 
     pub fn format(castling: u8) -> String {
         match castling {
@@ -221,7 +232,8 @@ mod fen {
     }
 }
 
-struct EngineState {
+#[derive(Debug, Clone)]
+pub struct EngineState {
     bitboards: [u64; 12],
     side: u8,
     castling: u8,
@@ -232,7 +244,8 @@ struct EngineState {
 
 pub struct Engine {
     attack_table: AttackTable,
-    state: EngineState,
+    pub state: EngineState,
+    pub history: Vec<EngineState>,
 }
 
 impl Engine {
@@ -241,6 +254,7 @@ impl Engine {
         Ok(Engine {
             attack_table: AttackTable::init(),
             state,
+            history: vec![],
         })
     }
 
@@ -527,6 +541,228 @@ impl Engine {
             0 => false,
             _ => castling & mask != 0,
         }
+    }
+    pub fn make_move(&mut self, move_: u32) -> bool {
+        self.history.push(self.state.clone());
+        let (source, target, piece, promotion, flags) = decode_move!(move_);
+        clear_bit!(self.state.bitboards[piece as usize], source);
+        set_bit!(self.state.bitboards[piece as usize], target);
+        let (capture, double, en_passant, castle) = flags;
+        if capture {
+            let board = self.state.bitboards[side::range(self.state.side ^ 1)]
+                .iter()
+                .enumerate()
+                .find(|(_, &bitboard)| get_bit!(bitboard, target));
+            if let Some((index, _)) = board {
+                let captured = index + ((self.state.side ^ 1) as usize * 6);
+                clear_bit!(self.state.bitboards[captured], target);
+            };
+        };
+
+        if promotion != 0 {
+            clear_bit!(self.state.bitboards[piece as usize], target);
+            set_bit!(self.state.bitboards[promotion as usize], target);
+        }
+        let (enemy_pawn, pawn_offset) = if self.state.side == side::WHITE {
+            (BLACK_PAWN, 8)
+        } else {
+            (WHITE_PAWN, -8)
+        };
+
+        if en_passant {
+            clear_bit!(
+                self.state.bitboards[enemy_pawn as usize],
+                target as i8 + pawn_offset
+            );
+        }
+        self.state.en_passant = if double {
+            Some((target as i8 + pawn_offset) as u8)
+        } else {
+            None
+        };
+
+        if castle {
+            let (rook, king_target, queen_target, (king_start, king_end), (queen_start, queen_end)) =
+                if self.state.side == side::WHITE {
+                    (
+                        WHITE_ROOK as usize,
+                        Square::g1,
+                        Square::c1,
+                        (Square::h1, Square::f1),
+                        (Square::a1, Square::d1),
+                    )
+                } else {
+                    (
+                        BLACK_ROOK as usize,
+                        Square::g8,
+                        Square::c8,
+                        (Square::h8, Square::f8),
+                        (Square::a8, Square::d8),
+                    )
+                };
+            if target == king_target as u8 {
+                clear_bit!(self.state.bitboards[rook], king_start as u8);
+                set_bit!(self.state.bitboards[rook], king_end as u8);
+            }
+            if target == queen_target as u8 {
+                clear_bit!(self.state.bitboards[rook], queen_start as u8);
+                set_bit!(self.state.bitboards[rook], queen_end as u8);
+            }
+        }
+
+        self.state.castling &= castling::CASLTING_RIGHTS[source as usize];
+        self.state.castling &= castling::CASLTING_RIGHTS[target as usize];
+        let king_square = if self.state.side == side::WHITE {
+            get_lsb!(self.state.bitboards[WHITE_KING as usize])
+        } else {
+            get_lsb!(self.state.bitboards[BLACK_KING as usize])
+        };
+        self.state.side ^= 1;
+        if self.is_square_attacked(king_square as usize, self.state.side ^ 1) {
+            self.take_back();
+            return false;
+        }
+        true
+    }
+
+    pub fn take_back(&mut self) {
+        let state = self
+            .history
+            .pop()
+            .expect("Engine history is empty. This should never happen.");
+        self.state = state;
+    }
+
+    pub fn perft_driver(&mut self, depth: u8) -> u64 {
+        let mut nodes = 0;
+        if depth == 0 {
+            return 1;
+        }
+        for &move_ in self.generate_moves().iter() {
+            if self.make_move(move_) {
+                nodes += self.perft_driver(depth - 1);
+                self.take_back();
+            }
+        }
+        nodes
+    }
+
+    pub fn perft(&mut self, depth: u8) {
+        let mut nodes = 0;
+        let now = Instant::now();
+
+        let print_divider = || {
+            println!("{}", "─".repeat(56));
+        };
+
+        let print_headers = || {
+            println!(
+                "{:>5} │ {:<6} │ {:<10} │ {:<12} │ {:<10}",
+                "No.", "Move", "Nodes", "Time", "kNPS"
+            );
+        };
+
+        print_divider();
+        println!("Performance test:");
+        print_divider();
+        print_headers();
+        print_divider();
+
+        for (index, &move_) in self.generate_moves().iter().enumerate() {
+            if self.make_move(move_) {
+                let start = Instant::now();
+                let depth_nodes = self.perft_driver(depth - 1);
+                nodes += depth_nodes;
+                self.take_back();
+
+                let elapsed = start.elapsed();
+                let seconds = elapsed.as_secs_f64();
+                let knps = if seconds > 0.0 {
+                    (depth_nodes as f64 / seconds) / 1000.0
+                } else {
+                    0.0
+                };
+
+                println!(
+                    "{:>5} │ {:<6} │ {:<10} │ {:<12?} │ {:<10.2}",
+                    index + 1,
+                    format_move(move_),
+                    depth_nodes,
+                    elapsed,
+                    knps
+                );
+            }
+        }
+
+        print_divider();
+
+        let total_elapsed = now.elapsed();
+        let total_seconds = total_elapsed.as_secs_f64();
+        let total_knps = if total_seconds > 0.0 {
+            (nodes as f64 / total_seconds) / 1000.0
+        } else {
+            0.0
+        };
+
+        println!("Depth: {}", depth);
+        println!("Nodes: {}", nodes);
+        println!("Time: {:?}", total_elapsed);
+        println!("kNPS: {:.2}", total_knps);
+        print_divider();
+    }
+
+    pub fn format_move(move_: u32) -> String {
+        let (source, target, _, promotion, _) = decode_move!(move_);
+        let suffix = if promotion != 0 {
+            format!("={}", ASCII_PIECES[promotion as usize])
+        } else {
+            String::new()
+        };
+
+        format!(
+            "{}{}{}",
+            index_to_algebraic(source as usize),
+            index_to_algebraic(target as usize),
+            suffix
+        )
+    }
+
+    pub fn print_move_list(moves: &[u32]) {
+        let print_divider = || {
+            println!("{}", "─".repeat(65));
+        };
+        let print_headers = || {
+            println!(
+                "{:>5} │ {:<6} │ {:^7} │ {:^7} │ {:^7} │ {:^7} │ {:^7}",
+                "No.", "Move", "Piece", "Capt.", "Doub.", "En Pas.", "Castle"
+            );
+        };
+        print_divider();
+        println!("  Move list:");
+        print_divider();
+        print_headers();
+        print_divider();
+
+        moves.iter().enumerate().for_each(|(index, &move_)| {
+            let (_, _, piece, _, (capture, double, en_passant, castle)) = decode_move!(move_);
+            print!("{:>5} │ ", format!("{:>3}", index + 1));
+
+            print!(
+                "{:<6} │ {:^7} │ {:^7} │ {:^7} │ {:^7} │ {:^7}",
+                format_move(move_),
+                ASCII_PIECES[piece as usize],
+                if capture { "■■■" } else { "‧‧‧" },
+                if double { "■■■" } else { "‧‧‧" },
+                if en_passant { "■■■" } else { "‧‧‧" },
+                if castle { "■■■" } else { "‧‧‧" }
+            );
+            println!();
+        });
+        print_divider();
+        print_headers();
+        print_divider();
+        println!("  Total moves: {}", moves.len());
+        print_divider();
     }
 
     pub fn print_attacked_squares(&self, side: u8) {
