@@ -1,7 +1,12 @@
-use std::ops::Range;
+use std::{cell::RefCell, ops::Range};
 
-use crate::{attacks::AttackTable, utils::index_to_algebraic};
-use piece::pieces::*;
+use crate::{
+    attacks::{masks, AttackTable},
+    consts::Square,
+    utils::index_to_algebraic,
+};
+use moves::{MOVE_CAPTURE, MOVE_CASTLE, MOVE_DOUBLE, MOVE_EN_PASSANT};
+use piece::{pieces::*, range};
 
 mod side {
     use std::ops::Range;
@@ -36,6 +41,8 @@ mod piece {
         pub const ROOK: u8 = 3;
         pub const QUEEN: u8 = 4;
         pub const KING: u8 = 5;
+
+        pub const PROMOTION_PIECES: [u8; 4] = [QUEEN, ROOK, BISHOP, KNIGHT];
     }
 
     pub mod pieces {
@@ -90,6 +97,13 @@ mod castling {
             }
         }
     }
+}
+
+mod moves {
+    pub const MOVE_CAPTURE: u8 = 1 << 0;
+    pub const MOVE_DOUBLE: u8 = 1 << 1;
+    pub const MOVE_EN_PASSANT: u8 = 1 << 2;
+    pub const MOVE_CASTLE: u8 = 1 << 3;
 }
 
 mod fen {
@@ -290,6 +304,228 @@ impl Engine {
         }
 
         false
+    }
+
+    pub fn generate_moves(&self) -> Vec<u32> {
+        let mut moves: Vec<u32> = Vec::new();
+
+        let EngineState {
+            bitboards,
+            side,
+            en_passant,
+            ..
+        } = self.state;
+        let all_pieces = self.get_occupancy(range::ALL);
+        let friendly_pieces = self.get_occupancy(side::range(side));
+        let enemy_pieces = self.get_occupancy(side::range(side ^ 1));
+
+        bitboards[side::range(side)]
+            .iter()
+            .enumerate()
+            .for_each(|(piece, &bitboard)| {
+                let mut bitboard = bitboard;
+                let piece_type = piece as u8 % 6;
+                if piece_type == piece::types::PAWN {
+                    let (start_rank, end_rank, promotion_rank, push) = if side == side::WHITE {
+                        (masks::RANK_2, masks::RANK_8, masks::RANK_7, -8)
+                    } else {
+                        (masks::RANK_7, masks::RANK_1, masks::RANK_2, 8)
+                    };
+                    while bitboard != 0 {
+                        let source = get_lsb!(bitboard) as usize;
+                        let source_bitboard = bitboard!(source);
+                        if source_bitboard & end_rank != 0 {
+                            break;
+                        }
+                        // Quiet moves
+                        let target = source.wrapping_add_signed(push);
+                        if !get_bit!(all_pieces, target) {
+                            if source_bitboard & promotion_rank != 0 {
+                                // Promotions
+                                piece::types::PROMOTION_PIECES
+                                    .iter()
+                                    .for_each(|&promotion| {
+                                        let promotion_piece = promotion + self.state.side * 6;
+                                        moves.push(encode_move!(
+                                            source,
+                                            target,
+                                            piece,
+                                            promotion_piece as usize,
+                                            0
+                                        ));
+                                    });
+                            } else {
+                                // Single push
+                                moves.push(encode_move!(source, target, piece));
+                            }
+
+                            // Double push
+                            if source_bitboard & start_rank != 0 {
+                                let double = target.wrapping_add_signed(push);
+                                if !get_bit!(all_pieces, double) {
+                                    moves.push(encode_move!(
+                                        source,
+                                        double,
+                                        piece,
+                                        MOVE_DOUBLE as usize
+                                    ));
+                                }
+                            }
+                        }
+
+                        // Attacks
+                        let mut attacks = self.attack_table.get_pawn_attacks(side, source);
+
+                        while attacks != 0 {
+                            let target = get_lsb!(attacks) as usize;
+                            let target_bitboard = bitboard!(target);
+
+                            // Captures
+                            if target_bitboard & enemy_pieces != 0 {
+                                if source_bitboard & promotion_rank != 0 {
+                                    // Promotions
+                                    piece::types::PROMOTION_PIECES
+                                        .iter()
+                                        .for_each(|&promotion| {
+                                            let promotion_piece = promotion + self.state.side * 6;
+                                            moves.push(encode_move!(
+                                                source,
+                                                target,
+                                                piece,
+                                                promotion_piece as usize,
+                                                MOVE_CAPTURE as usize
+                                            ));
+                                        });
+                                } else {
+                                    moves.push(encode_move!(
+                                        source,
+                                        target,
+                                        piece,
+                                        MOVE_CAPTURE as usize
+                                    ));
+                                }
+                            }
+
+                            // En passant
+                            if let Some(en_passant) = en_passant {
+                                if target_bitboard & bitboard!(en_passant) != 0 {
+                                    moves.push(encode_move!(
+                                        source,
+                                        target,
+                                        piece,
+                                        (MOVE_CAPTURE | MOVE_EN_PASSANT) as usize
+                                    ));
+                                }
+                            }
+                            clear_lsb!(attacks);
+                        }
+
+                        clear_lsb!(bitboard);
+                    }
+                    return;
+                }
+                if piece_type == piece::types::KING {
+                    // Castling
+                    let (
+                        king_square,
+                        king_target,
+                        queen_target,
+                        king_empty,
+                        queen_empty,
+                        king_mask,
+                        queen_mask,
+                    ) = if side == side::WHITE {
+                        (
+                            Square::e1,
+                            Square::g1,
+                            Square::c1,
+                            [Square::f1, Square::g1],
+                            [Square::d1, Square::c1, Square::b1],
+                            castling::WK,
+                            castling::WQ,
+                        )
+                    } else {
+                        (
+                            Square::e8,
+                            Square::g8,
+                            Square::c8,
+                            [Square::f8, Square::g8],
+                            [Square::d8, Square::c8, Square::b8],
+                            castling::BK,
+                            castling::BQ,
+                        )
+                    };
+                    if self.can_castle(king_mask)
+                        && king_empty
+                            .iter()
+                            .all(|&square| !get_bit!(all_pieces, square as u8))
+                        && !self.is_square_attacked(king_square as usize, side)
+                        && !self.is_square_attacked(king_empty[0] as usize, side)
+                    {
+                        moves.push(encode_move!(
+                            king_square as usize,
+                            king_target as usize,
+                            piece,
+                            MOVE_CASTLE as usize
+                        ));
+                    }
+                    if self.can_castle(queen_mask)
+                        && queen_empty
+                            .iter()
+                            .all(|&square| !get_bit!(all_pieces, square as u8))
+                        && !self.is_square_attacked(king_square as usize, side)
+                        && !self.is_square_attacked(queen_empty[0] as usize, side)
+                    {
+                        moves.push(encode_move!(
+                            king_square as usize,
+                            queen_target as usize,
+                            piece,
+                            MOVE_CASTLE as usize
+                        ));
+                    }
+                }
+
+                while bitboard != 0 {
+                    let source = get_lsb!(bitboard) as usize;
+                    let mut attacks = match piece_type {
+                        piece::types::KNIGHT => self.attack_table.get_knight_attacks(source),
+                        piece::types::KING => self.attack_table.get_king_attacks(source),
+                        piece::types::BISHOP => {
+                            self.attack_table.get_bishop_attacks(source, all_pieces)
+                        }
+                        piece::types::ROOK => {
+                            self.attack_table.get_rook_attacks(source, all_pieces)
+                        }
+                        piece::types::QUEEN => {
+                            self.attack_table.get_queen_attacks(source, all_pieces)
+                        }
+                        _ => unreachable!(),
+                    } & !friendly_pieces;
+                    while attacks != 0 {
+                        let target = get_lsb!(attacks) as usize;
+                        let target_bitboard = bitboard!(target);
+
+                        // Captures
+                        if target_bitboard & enemy_pieces != 0 {
+                            moves.push(encode_move!(source, target, piece, MOVE_CAPTURE as usize));
+                        } else {
+                            moves.push(encode_move!(source, target, piece));
+                        }
+                        clear_lsb!(attacks);
+                    }
+                    clear_lsb!(bitboard);
+                }
+            });
+
+        moves
+    }
+
+    fn can_castle(&self, mask: u8) -> bool {
+        let EngineState { castling, .. } = self.state;
+        match castling {
+            0 => false,
+            _ => castling & mask != 0,
+        }
     }
 
     pub fn print_attacked_squares(&self, side: u8) {
