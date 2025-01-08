@@ -25,6 +25,21 @@ pub fn print_bitboard(bitboard: u64) {
     println!("{}", divider);
 }
 
+/// Convert an algebraic square (e.g., "a8") to a bitboard index (0-63).
+pub fn algebraic_to_index(square: &str) -> u8 {
+    let mut chars = square.chars();
+    let file = chars.next().unwrap() as u8 - b'a';
+    let rank = 8 - chars.next().unwrap().to_digit(10).unwrap() as u8;
+    rank * 8 + file
+}
+
+/// Convert a bitboard index (0-63) to an algebraic square (e.g., 0 to "a8").
+pub fn index_to_algebraic(index: usize) -> String {
+    let file = (index % 8) as u8 + b'a';
+    let rank = 8 - (index / 8);
+    format!("{}{}", file as char, rank)
+}
+
 /// Pauses execution until any key is pressed.
 pub fn pause() {
     println!("Press any key to continue...");
