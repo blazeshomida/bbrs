@@ -3,7 +3,7 @@ use std::{ops::Range, time::Instant};
 use crate::{
     attacks::{masks, AttackTable},
     consts::Square,
-    utils::{format_move, index_to_algebraic, pause, print_move_list},
+    utils::{format_move, index_to_algebraic},
 };
 use moves::{MOVE_CAPTURE, MOVE_CASTLE, MOVE_DOUBLE, MOVE_EN_PASSANT};
 use piece::{pieces::*, range};
@@ -232,7 +232,16 @@ mod fen {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+pub struct HistoryItem {
+    move_: u32,
+    captured: u8,
+    side: u8,
+    castling: u8,
+    en_passant: Option<u8>,
+}
+
+#[derive(Debug)]
 pub struct EngineState {
     bitboards: [u64; 12],
     side: u8,
@@ -245,7 +254,7 @@ pub struct EngineState {
 pub struct Engine {
     attack_table: AttackTable,
     pub state: EngineState,
-    pub history: Vec<EngineState>,
+    pub history: Vec<HistoryItem>,
 }
 
 impl Engine {
@@ -543,7 +552,13 @@ impl Engine {
         }
     }
     pub fn make_move(&mut self, move_: u32) -> bool {
-        self.history.push(self.state.clone());
+        let mut history_item = HistoryItem {
+            move_,
+            captured: 0,
+            side: self.state.side,
+            castling: self.state.castling,
+            en_passant: self.state.en_passant,
+        };
         let (source, target, piece, promotion, flags) = decode_move!(move_);
         clear_bit!(self.state.bitboards[piece as usize], source);
         set_bit!(self.state.bitboards[piece as usize], target);
@@ -555,9 +570,12 @@ impl Engine {
                 .find(|(_, &bitboard)| get_bit!(bitboard, target));
             if let Some((index, _)) = board {
                 let captured = index + ((self.state.side ^ 1) as usize * 6);
+                history_item.captured = captured as u8;
                 clear_bit!(self.state.bitboards[captured], target);
             };
         };
+
+        self.history.push(history_item);
 
         if promotion != 0 {
             clear_bit!(self.state.bitboards[piece as usize], target);
@@ -618,6 +636,8 @@ impl Engine {
             get_lsb!(self.state.bitboards[BLACK_KING as usize])
         };
         self.state.side ^= 1;
+        self.state.half_moves += 1;
+        self.state.full_moves = self.state.half_moves / 2 + 1;
         if self.is_square_attacked(king_square as usize, self.state.side ^ 1) {
             self.take_back();
             return false;
@@ -626,11 +646,72 @@ impl Engine {
     }
 
     pub fn take_back(&mut self) {
-        let state = self
+        let HistoryItem {
+            move_,
+            captured,
+            side,
+            castling,
+            en_passant,
+        } = self
             .history
             .pop()
             .expect("Engine history is empty. This should never happen.");
-        self.state = state;
+        let (source, target, piece, promotion, flags) = decode_move!(move_);
+        clear_bit!(self.state.bitboards[piece as usize], target);
+        set_bit!(self.state.bitboards[piece as usize], source);
+
+        if promotion != 0 {
+            clear_bit!(self.state.bitboards[promotion as usize], target);
+        }
+
+        let (capture_flag, _, en_passant_flag, castle_flag) = flags;
+
+        if en_passant_flag {
+            let (pawn, restore_square) = if self.state.side == side::WHITE {
+                (WHITE_PAWN, target - 8)
+            } else {
+                (BLACK_PAWN, target + 8)
+            };
+            set_bit!(self.state.bitboards[pawn as usize], restore_square);
+        } else if capture_flag {
+            set_bit!(self.state.bitboards[captured as usize], target);
+        };
+
+        if castle_flag {
+            let (rook, king_target, queen_target, (king_start, king_end), (queen_start, queen_end)) =
+                if side == side::WHITE {
+                    (
+                        WHITE_ROOK as usize,
+                        Square::g1,
+                        Square::c1,
+                        (Square::h1, Square::f1),
+                        (Square::a1, Square::d1),
+                    )
+                } else {
+                    (
+                        BLACK_ROOK as usize,
+                        Square::g8,
+                        Square::c8,
+                        (Square::h8, Square::f8),
+                        (Square::a8, Square::d8),
+                    )
+                };
+            if target == king_target as u8 {
+                clear_bit!(self.state.bitboards[rook], king_end as u8);
+                set_bit!(self.state.bitboards[rook], king_start as u8);
+            }
+
+            if target == queen_target as u8 {
+                clear_bit!(self.state.bitboards[rook], queen_end as u8);
+                set_bit!(self.state.bitboards[rook], queen_start as u8);
+            }
+        }
+
+        self.state.side = side;
+        self.state.castling = castling;
+        self.state.en_passant = en_passant;
+        self.state.half_moves -= 1;
+        self.state.full_moves = self.state.half_moves / 2 + 1
     }
 
     pub fn perft_driver(&mut self, depth: u8) -> u64 {
