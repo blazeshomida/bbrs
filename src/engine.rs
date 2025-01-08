@@ -322,9 +322,10 @@ impl Engine {
         bitboards[side::range(side)]
             .iter()
             .enumerate()
-            .for_each(|(piece, &bitboard)| {
+            .for_each(|(piece_type, &bitboard)| {
                 let mut bitboard = bitboard;
-                let piece_type = piece as u8 % 6;
+                let piece_type = piece_type as u8;
+                let piece = (piece_type + side * 6) as usize;
                 if piece_type == piece::types::PAWN {
                     let (start_rank, end_rank, promotion_rank, push) = if side == side::WHITE {
                         (masks::RANK_2, masks::RANK_8, masks::RANK_7, -8)
