@@ -2,113 +2,128 @@ use std::{array, time::Instant, vec};
 
 use crate::magic::MagicPRNG;
 
-/// FILE_MASKS represents the 8 files (columns) on an 8x8 chessboard.
-///
-/// Direction: ↑↓ (a-file to h-file, up and down)
-///
-/// Files: `a` to `h`
-const FILE_MASKS: [u64; 8] = [
-    0x101010101010101,  // a-file
-    0x202020202020202,  // b-file
-    0x404040404040404,  // c-file
-    0x808080808080808,  // d-file
-    0x1010101010101010, // e-file
-    0x2020202020202020, // f-file
-    0x4040404040404040, // g-file
-    0x8080808080808080, // h-file
-];
+pub mod masks {
+    /// FILE_MASKS represents the 8 files (columns) on an 8x8 chessboard.
+    ///
+    /// Direction: ↑↓ (a-file to h-file, up and down)
+    ///
+    /// Files: `a` to `h`
+    pub const FILE_MASKS: [u64; 8] = [
+        0x101010101010101,  // a-file
+        0x202020202020202,  // b-file
+        0x404040404040404,  // c-file
+        0x808080808080808,  // d-file
+        0x1010101010101010, // e-file
+        0x2020202020202020, // f-file
+        0x4040404040404040, // g-file
+        0x8080808080808080, // h-file
+    ];
 
-/// RANK_MASKS represents the 8 ranks (rows) on an 8x8 chessboard.
-///
-/// Direction: ←→ (rank 8 to rank 1, left to right)
-///
-/// Ranks: `8` to `1`
-const RANK_MASKS: [u64; 8] = [
-    0xFF,               // rank 8
-    0xFF00,             // rank 7
-    0xFF0000,           // rank 6
-    0xFF000000,         // rank 5
-    0xFF00000000,       // rank 4
-    0xFF0000000000,     // rank 3
-    0xFF000000000000,   // rank 2
-    0xFF00000000000000, // rank 1
-];
+    /// RANK_MASKS represents the 8 ranks (rows) on an 8x8 chessboard.
+    ///
+    /// Direction: ←→ (rank 8 to rank 1, left to right)
+    ///
+    /// Ranks: `8` to `1`
+    pub const RANK_MASKS: [u64; 8] = [
+        0xFF,               // rank 8
+        0xFF00,             // rank 7
+        0xFF0000,           // rank 6
+        0xFF000000,         // rank 5
+        0xFF00000000,       // rank 4
+        0xFF0000000000,     // rank 3
+        0xFF000000000000,   // rank 2
+        0xFF00000000000000, // rank 1
+    ];
 
-/// DIAGONAL_MASKS represents the 15 diagonals on an 8x8 chessboard.
-///
-/// Direction: ↖↘ (a8 to h1, top-left to bottom-right)
-///
-/// Formula: `diag_index = 7 - rank + file`
-const DIAGONAL_MASKS: [u64; 15] = [
-    0x100000000000000,
-    0x201000000000000,
-    0x402010000000000,
-    0x804020100000000,
-    0x1008040201000000,
-    0x2010080402010000,
-    0x4020100804020100,
-    0x8040201008040201,
-    0x80402010080402,
-    0x804020100804,
-    0x8040201008,
-    0x80402010,
-    0x804020,
-    0x8040,
-    0x80,
-];
+    /// DIAGONAL_MASKS represents the 15 diagonals on an 8x8 chessboard.
+    ///
+    /// Direction: ↖↘ (a8 to h1, top-left to bottom-right)
+    ///
+    /// Formula: `diag_index = 7 - rank + file`
+    pub const DIAGONAL_MASKS: [u64; 15] = [
+        0x100000000000000,
+        0x201000000000000,
+        0x402010000000000,
+        0x804020100000000,
+        0x1008040201000000,
+        0x2010080402010000,
+        0x4020100804020100,
+        0x8040201008040201,
+        0x80402010080402,
+        0x804020100804,
+        0x8040201008,
+        0x80402010,
+        0x804020,
+        0x8040,
+        0x80,
+    ];
 
-/// ANTI_DIAGONAL_MASKS represents the 15 anti-diagonals on an 8x8 chessboard.
-///
-/// Direction: ↗↙ (a1 to h8, top-right to bottom-left)
-///
-/// Formula: `anti_diag_index = file + rank`
-const ANTI_DIAGONAL_MASKS: [u64; 15] = [
-    0x1,
-    0x102,
-    0x10204,
-    0x1020408,
-    0x102040810,
-    0x10204081020,
-    0x1020408102040,
-    0x102040810204080,
-    0x204081020408000,
-    0x408102040800000,
-    0x810204080000000,
-    0x1020408000000000,
-    0x2040800000000000,
-    0x4080000000000000,
-    0x8000000000000000,
-];
+    /// ANTI_DIAGONAL_MASKS represents the 15 anti-diagonals on an 8x8 chessboard.
+    ///
+    /// Direction: ↗↙ (a1 to h8, top-right to bottom-left)
+    ///
+    /// Formula: `anti_diag_index = file + rank`
+    pub const ANTI_DIAGONAL_MASKS: [u64; 15] = [
+        0x1,
+        0x102,
+        0x10204,
+        0x1020408,
+        0x102040810,
+        0x10204081020,
+        0x1020408102040,
+        0x102040810204080,
+        0x204081020408000,
+        0x408102040800000,
+        0x810204080000000,
+        0x1020408000000000,
+        0x2040800000000000,
+        0x4080000000000000,
+        0x8000000000000000,
+    ];
 
-const FILE_A: u64 = FILE_MASKS[0];
-const FILE_B: u64 = FILE_MASKS[1];
-const FILE_G: u64 = FILE_MASKS[6];
-const FILE_H: u64 = FILE_MASKS[7];
-const FILE_AB: u64 = FILE_A | FILE_B;
-const FILE_GH: u64 = FILE_G | FILE_H;
-const RANK_1: u64 = RANK_MASKS[0];
-const RANK_8: u64 = RANK_MASKS[7];
+    pub const FILE_A: u64 = FILE_MASKS[0];
 
-const VBORDER_MASK: u64 = FILE_A | FILE_H;
-const HBORDER_MASK: u64 = RANK_1 | RANK_8;
-const BORDER_MASK: u64 = VBORDER_MASK | HBORDER_MASK;
+    pub const FILE_B: u64 = FILE_MASKS[1];
+
+    pub const FILE_G: u64 = FILE_MASKS[6];
+
+    pub const FILE_H: u64 = FILE_MASKS[7];
+
+    pub const FILE_AB: u64 = FILE_A | FILE_B;
+
+    pub const FILE_GH: u64 = FILE_G | FILE_H;
+
+    
+    pub const RANK_1: u64 = RANK_MASKS[7];
+    pub const RANK_2: u64 = RANK_MASKS[6];
+    pub const RANK_7: u64 = RANK_MASKS[1];
+    pub const RANK_8: u64 = RANK_MASKS[0];
+    
+    
+
+    pub const VBORDER_MASK: u64 = FILE_A | FILE_H;
+
+    pub const HBORDER_MASK: u64 = RANK_1 | RANK_8;
+
+    pub const BORDER_MASK: u64 = VBORDER_MASK | HBORDER_MASK;
+}
 
 #[rustfmt::skip]
 const PAWN_OFFSETS: [[(i8, u64); 2]; 2] = [
-    [(-7, !FILE_A), (-9, !FILE_H)],
-    [(9, !FILE_A), (7, !FILE_H)],
+    [(-7, !masks::FILE_A), (-9, !masks::FILE_H)],
+    [(9, !masks::FILE_A), (7, !masks::FILE_H)],
 ];
 
 #[rustfmt::skip]
 const KNIGHT_OFFSETS: [(i8, u64); 8] = [
-    ( 6, !FILE_GH), ( 10, !FILE_AB), ( 15, !FILE_H), ( 17, !FILE_A),
-    (-6, !FILE_AB), (-10, !FILE_GH), (-15, !FILE_A), (-17, !FILE_H)
+    ( 6, !masks::FILE_GH), ( 10, !masks::FILE_AB), ( 15, !masks::FILE_H), ( 17, !masks::FILE_A),
+    (-6, !masks::FILE_AB), (-10, !masks::FILE_GH), (-15, !masks::FILE_A), (-17, !masks::FILE_H)
 ];
 
 #[rustfmt::skip]
 const KING_OFFSETS: [(i8, u64); 8] = [
-    ( 1, !FILE_A), ( 7, !FILE_H), ( 8, !0), ( 9, !FILE_A),
-    (-1, !FILE_H), (-7, !FILE_A), (-8, !0), (-9, !FILE_H),
+    ( 1, !masks::FILE_A), ( 7, !masks::FILE_H), ( 8, !0), ( 9, !masks::FILE_A),
+    (-1, !masks::FILE_H), (-7, !masks::FILE_A), (-8, !0), (-9, !masks::FILE_H),
 ];
 
 #[rustfmt::skip]
@@ -320,17 +335,22 @@ fn mask_bishop_attacks(square: u8) -> u64 {
 
     mask_slider_attacks(
         square,
-        DIAGONAL_MASKS[(7 - rank + file) as usize] & !BORDER_MASK,
+        masks::DIAGONAL_MASKS[(7 - rank + file) as usize] & !masks::BORDER_MASK,
     ) | mask_slider_attacks(
         square,
-        ANTI_DIAGONAL_MASKS[(rank + file) as usize] & !BORDER_MASK,
+        masks::ANTI_DIAGONAL_MASKS[(rank + file) as usize] & !masks::BORDER_MASK,
     )
 }
 
 fn mask_rook_attacks(square: u8) -> u64 {
     // Use the same line-attack helper for rank and file
-    mask_slider_attacks(square, RANK_MASKS[(square >> 3) as usize] & !VBORDER_MASK)
-        | mask_slider_attacks(square, FILE_MASKS[(square & 7) as usize] & !HBORDER_MASK)
+    mask_slider_attacks(
+        square,
+        masks::RANK_MASKS[(square >> 3) as usize] & !masks::VBORDER_MASK,
+    ) | mask_slider_attacks(
+        square,
+        masks::FILE_MASKS[(square & 7) as usize] & !masks::HBORDER_MASK,
+    )
 }
 
 /// Generates bishop attacks by combining diagonal and anti-diagonal lines.
@@ -340,11 +360,11 @@ fn generate_bishop_attacks(square: u8, occupancy: u64) -> u64 {
     // Just call the line-attack helper for each relevant mask
     generate_slider_attacks(
         square,
-        DIAGONAL_MASKS[(7 - rank + file) as usize],
+        masks::DIAGONAL_MASKS[(7 - rank + file) as usize],
         occupancy,
     ) | generate_slider_attacks(
         square,
-        ANTI_DIAGONAL_MASKS[(rank + file) as usize],
+        masks::ANTI_DIAGONAL_MASKS[(rank + file) as usize],
         occupancy,
     )
 }
@@ -352,8 +372,8 @@ fn generate_bishop_attacks(square: u8, occupancy: u64) -> u64 {
 /// Generates rook attacks by combining rank and file lines.
 fn generate_rook_attacks(square: u8, occupancy: u64) -> u64 {
     // Use the same line-attack helper for rank and file
-    generate_slider_attacks(square, RANK_MASKS[(square >> 3) as usize], occupancy)
-        | generate_slider_attacks(square, FILE_MASKS[(square & 7) as usize], occupancy)
+    generate_slider_attacks(square, masks::RANK_MASKS[(square >> 3) as usize], occupancy)
+        | generate_slider_attacks(square, masks::FILE_MASKS[(square & 7) as usize], occupancy)
 }
 
 fn create_occupancy(index: usize, mask: u64, bits: u8) -> u64 {
@@ -554,14 +574,14 @@ mod tests {
 
     #[test]
     fn test_file_masks() {
-        assert_eq!(FILE_A, 0x101010101010101);
-        assert_eq!(FILE_H, 0x8080808080808080);
+        assert_eq!(masks::FILE_A, 0x101010101010101);
+        assert_eq!(masks::FILE_H, 0x8080808080808080);
     }
 
     #[test]
     fn test_rank_masks() {
-        assert_eq!(RANK_1, 0xFF);
-        assert_eq!(RANK_8, 0xFF00000000000000);
+        assert_eq!(masks::RANK_1, 0xFF);
+        assert_eq!(masks::RANK_8, 0xFF00000000000000);
     }
 
     #[test]
