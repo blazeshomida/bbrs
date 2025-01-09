@@ -1,236 +1,21 @@
 use std::{ops::Range, time::Instant};
 
-use crate::{
-    attacks::{masks, AttackTable},
-    consts::Square,
-    utils::{format_move, index_to_algebraic},
-};
-use moves::{MOVE_CAPTURE, MOVE_CASTLE, MOVE_DOUBLE, MOVE_EN_PASSANT};
-use piece::{pieces::*, range};
+use attacks::{masks, AttackTable};
+use board::{index_to_algebraic, Square};
+use piece::{pieces::*, side};
 
-mod side {
-    use std::ops::Range;
+#[macro_use]
+mod bits;
+#[macro_use]
+mod moves;
 
-    use super::piece;
-
-    pub const WHITE: u8 = 0;
-    pub const BLACK: u8 = 1;
-
-    pub fn format<'a>(side: u8) -> &'a str {
-        match side {
-            WHITE => "white",
-            BLACK => "black",
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn range(side: u8) -> Range<usize> {
-        match side {
-            WHITE => piece::range::WHITE,
-            BLACK => piece::range::BLACK,
-            _ => unreachable!(),
-        }
-    }
-}
-
-pub mod piece {
-    pub mod types {
-        pub const PAWN: u8 = 0;
-        pub const KNIGHT: u8 = 1;
-        pub const BISHOP: u8 = 2;
-        pub const ROOK: u8 = 3;
-        pub const QUEEN: u8 = 4;
-        pub const KING: u8 = 5;
-
-        pub const PROMOTION_PIECES: [u8; 4] = [QUEEN, ROOK, BISHOP, KNIGHT];
-    }
-
-    pub mod pieces {
-        pub const WHITE_PAWN: u8 = 0;
-        pub const WHITE_KNIGHT: u8 = 1;
-        pub const WHITE_BISHOP: u8 = 2;
-        pub const WHITE_ROOK: u8 = 3;
-        pub const WHITE_QUEEN: u8 = 4;
-        pub const WHITE_KING: u8 = 5;
-        pub const BLACK_PAWN: u8 = 6;
-        pub const BLACK_KNIGHT: u8 = 7;
-        pub const BLACK_BISHOP: u8 = 8;
-        pub const BLACK_ROOK: u8 = 9;
-        pub const BLACK_QUEEN: u8 = 10;
-        pub const BLACK_KING: u8 = 11;
-        pub const ASCII_PIECES: [char; 12] =
-            ['P', 'N', 'B', 'R', 'Q', 'K', 'p', 'n', 'b', 'r', 'q', 'k'];
-    }
-
-    pub mod range {
-        use std::ops::Range;
-        pub const WHITE: Range<usize> = 0..6;
-        pub const BLACK: Range<usize> = 6..12;
-        pub const ALL: Range<usize> = 0..12;
-    }
-}
-
-mod castling {
-    pub const WK: u8 = 1 << 0;
-    pub const WQ: u8 = 1 << 1;
-    pub const BK: u8 = 1 << 2;
-    pub const BQ: u8 = 1 << 3;
-    #[rustfmt::skip]
-    pub const CASLTING_RIGHTS: [u8; 64] = [
-         7, 15, 15, 15,  3, 15, 15, 11, 
-        15, 15, 15, 15, 15, 15, 15, 15, 
-        15, 15, 15, 15, 15, 15, 15, 15, 
-        15, 15, 15, 15, 15, 15, 15, 15, 
-        15, 15, 15, 15, 15, 15, 15, 15, 
-        15, 15, 15, 15, 15, 15, 15, 15, 
-        15, 15, 15, 15, 15, 15, 15, 15, 
-        13, 15, 15, 15, 12, 15, 15, 14,
-    ];
-
-    pub fn format(castling: u8) -> String {
-        match castling {
-            0 => "-".to_string(),
-            _ => {
-                let mut result = String::new();
-                if castling & WK != 0 {
-                    result.push('K');
-                }
-                if castling & WQ != 0 {
-                    result.push('Q');
-                }
-                if castling & BK != 0 {
-                    result.push('k');
-                }
-                if castling & BQ != 0 {
-                    result.push('q');
-                }
-                result
-            }
-        }
-    }
-}
-
-mod moves {
-    pub const MOVE_CAPTURE: u8 = 1 << 0;
-    pub const MOVE_DOUBLE: u8 = 1 << 1;
-    pub const MOVE_EN_PASSANT: u8 = 1 << 2;
-    pub const MOVE_CASTLE: u8 = 1 << 3;
-}
-
-mod fen {
-    use super::{castling::*, piece::pieces::*, side::*, EngineState};
-    use crate::utils::algebraic_to_index;
-    fn parse_piece(fen: char) -> Option<u8> {
-        match fen {
-            'P' => Some(WHITE_PAWN),
-            'N' => Some(WHITE_KNIGHT),
-            'B' => Some(WHITE_BISHOP),
-            'R' => Some(WHITE_ROOK),
-            'Q' => Some(WHITE_QUEEN),
-            'K' => Some(WHITE_KING),
-            'p' => Some(BLACK_PAWN),
-            'n' => Some(BLACK_KNIGHT),
-            'b' => Some(BLACK_BISHOP),
-            'r' => Some(BLACK_ROOK),
-            'q' => Some(BLACK_QUEEN),
-            'k' => Some(BLACK_KING),
-            _ => None,
-        }
-    }
-
-    /// Convert castling rights from a FEN string to a bitmask.
-    fn parse_castle_rights(rights: &str) -> Result<u8, &str> {
-        let mut mask = 0;
-        for ch in rights.chars() {
-            match ch {
-                'K' => mask |= WK,
-                'Q' => mask |= WQ,
-                'k' => mask |= BK,
-                'q' => mask |= BQ,
-                '-' => (),
-                _ => return Err("Invalid FEN: Unexpected character in castling rights"),
-            }
-        }
-        Ok(mask)
-    }
-
-    /// Parse the en passant square from a FEN string.
-    fn parse_en_passant(square: &str) -> Result<Option<u8>, &str> {
-        if square == "-" {
-            return Ok(None);
-        }
-        if square.len() != 2 {
-            return Err("Invalid FEN: En passant square must be in algebraic notation");
-        }
-        Ok(Some(algebraic_to_index(square)))
-    }
-
-    pub fn parse(fen: &str) -> Result<EngineState, &str> {
-        let sections: Vec<&str> = fen.split_whitespace().collect();
-
-        if sections.len() != 6 {
-            return Err("Invalid FEN: Incorrect number of sections");
-        }
-
-        let (piece_placement, side, castling, en_passant, half_moves, full_moves) = (
-            sections[0],
-            sections[1],
-            sections[2],
-            sections[3],
-            sections[4]
-                .parse::<u8>()
-                .map_err(|_| "Invalid halfmove clock")?,
-            sections[5]
-                .parse::<u8>()
-                .map_err(|_| "Invalid fullmove number")?,
-        );
-
-        // Reset the board state
-        let mut bitboards = [0u64; 12];
-
-        // Parse piece placement
-        let mut index = 0;
-        for ch in piece_placement.chars() {
-            match ch {
-                '/' => continue,
-                ch if ch.is_ascii_digit() => {
-                    index += ch.to_digit(10).unwrap() as u64;
-                    continue;
-                }
-                _ => {
-                    if let Some(piece) = parse_piece(ch) {
-                        set_bit!(bitboards[piece as usize], index);
-                        index += 1;
-                    } else {
-                        return Err("Invalid FEN: Unexpected character");
-                    }
-                }
-            };
-        }
-
-        // Parse active color
-        let side = match side {
-            "w" => WHITE,
-            "b" => BLACK,
-            _ => return Err("Invalid FEN: Active color must be 'w' or 'b'"),
-        };
-
-        // Parse castling rights
-        let castling = parse_castle_rights(castling)?;
-
-        // Parse en passant square
-        let en_passant = parse_en_passant(en_passant)?;
-
-        Ok(EngineState {
-            bitboards,
-            side,
-            castling,
-            en_passant,
-            half_moves,
-            full_moves,
-        })
-    }
-}
+mod attacks;
+mod board;
+mod castling;
+mod debug;
+mod fen;
+mod magics;
+mod piece;
 
 #[derive(Debug)]
 pub struct HistoryItem {
@@ -338,7 +123,7 @@ impl Engine {
             en_passant,
             ..
         } = self.state;
-        let all_pieces = self.get_occupancy(range::ALL);
+        let all_pieces = self.get_occupancy(piece::range::ALL);
         let friendly_pieces = self.get_occupancy(side::range(side));
         let enemy_pieces = self.get_occupancy(side::range(side ^ 1));
 
@@ -391,7 +176,7 @@ impl Engine {
                                         source,
                                         double,
                                         piece,
-                                        MOVE_DOUBLE as usize
+                                        moves::flags::DOUBLE as usize
                                     ));
                                 }
                             }
@@ -417,7 +202,7 @@ impl Engine {
                                                 target,
                                                 piece,
                                                 promotion_piece as usize,
-                                                MOVE_CAPTURE as usize
+                                                moves::flags::CAPTURE as usize
                                             ));
                                         });
                                 } else {
@@ -425,7 +210,7 @@ impl Engine {
                                         source,
                                         target,
                                         piece,
-                                        MOVE_CAPTURE as usize
+                                        moves::flags::CAPTURE as usize
                                     ));
                                 }
                             }
@@ -437,7 +222,7 @@ impl Engine {
                                         source,
                                         target,
                                         piece,
-                                        (MOVE_CAPTURE | MOVE_EN_PASSANT) as usize
+                                        (moves::flags::CAPTURE | moves::flags::EN_PASSANT) as usize
                                     ));
                                 }
                             }
@@ -465,8 +250,8 @@ impl Engine {
                             Square::c1,
                             [Square::f1, Square::g1],
                             [Square::d1, Square::c1, Square::b1],
-                            castling::WK,
-                            castling::WQ,
+                            castling::flags::WK,
+                            castling::flags::WQ,
                         )
                     } else {
                         (
@@ -475,8 +260,8 @@ impl Engine {
                             Square::c8,
                             [Square::f8, Square::g8],
                             [Square::d8, Square::c8, Square::b8],
-                            castling::BK,
-                            castling::BQ,
+                            castling::flags::BK,
+                            castling::flags::BQ,
                         )
                     };
                     if self.can_castle(king_mask)
@@ -490,7 +275,7 @@ impl Engine {
                             king_square as usize,
                             king_target as usize,
                             piece,
-                            MOVE_CASTLE as usize
+                            moves::flags::CASTLE as usize
                         ));
                     }
                     if self.can_castle(queen_mask)
@@ -504,7 +289,7 @@ impl Engine {
                             king_square as usize,
                             queen_target as usize,
                             piece,
-                            MOVE_CASTLE as usize
+                            moves::flags::CASTLE as usize
                         ));
                     }
                 }
@@ -531,7 +316,12 @@ impl Engine {
 
                         // Captures
                         if target_bitboard & enemy_pieces != 0 {
-                            moves.push(encode_move!(source, target, piece, MOVE_CAPTURE as usize));
+                            moves.push(encode_move!(
+                                source,
+                                target,
+                                piece,
+                                moves::flags::CAPTURE as usize
+                            ));
                         } else {
                             moves.push(encode_move!(source, target, piece));
                         }
@@ -767,7 +557,7 @@ impl Engine {
                 println!(
                     "{:>5} │ {:<6} │ {:<10} │ {:<12?} │ {:<10.2}",
                     index + 1,
-                    format_move(move_),
+                    moves::format(move_),
                     depth_nodes,
                     elapsed,
                     knps
@@ -789,60 +579,6 @@ impl Engine {
         println!("Nodes: {}", nodes);
         println!("Time: {:?}", total_elapsed);
         println!("kNPS: {:.2}", total_knps);
-        print_divider();
-    }
-
-    pub fn format_move(move_: u32) -> String {
-        let (source, target, _, promotion, _) = decode_move!(move_);
-        let suffix = if promotion != 0 {
-            format!("={}", ASCII_PIECES[promotion as usize])
-        } else {
-            String::new()
-        };
-
-        format!(
-            "{}{}{}",
-            index_to_algebraic(source as usize),
-            index_to_algebraic(target as usize),
-            suffix
-        )
-    }
-
-    pub fn print_move_list(moves: &[u32]) {
-        let print_divider = || {
-            println!("{}", "─".repeat(65));
-        };
-        let print_headers = || {
-            println!(
-                "{:>5} │ {:<6} │ {:^7} │ {:^7} │ {:^7} │ {:^7} │ {:^7}",
-                "No.", "Move", "Piece", "Capt.", "Doub.", "En Pas.", "Castle"
-            );
-        };
-        print_divider();
-        println!("  Move list:");
-        print_divider();
-        print_headers();
-        print_divider();
-
-        moves.iter().enumerate().for_each(|(index, &move_)| {
-            let (_, _, piece, _, (capture, double, en_passant, castle)) = decode_move!(move_);
-            print!("{:>5} │ ", format!("{:>3}", index + 1));
-
-            print!(
-                "{:<6} │ {:^7} │ {:^7} │ {:^7} │ {:^7} │ {:^7}",
-                format_move(move_),
-                ASCII_PIECES[piece as usize],
-                if capture { "■■■" } else { "‧‧‧" },
-                if double { "■■■" } else { "‧‧‧" },
-                if en_passant { "■■■" } else { "‧‧‧" },
-                if castle { "■■■" } else { "‧‧‧" }
-            );
-            println!();
-        });
-        print_divider();
-        print_headers();
-        print_divider();
-        println!("  Total moves: {}", moves.len());
         print_divider();
     }
 

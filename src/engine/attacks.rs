@@ -1,6 +1,4 @@
-use std::{array, time::Instant, vec};
-
-use crate::magic::MagicPRNG;
+use std::array;
 
 pub mod masks {
     /// FILE_MASKS represents the 8 files (columns) on an 8x8 chessboard.
@@ -93,13 +91,10 @@ pub mod masks {
 
     pub const FILE_GH: u64 = FILE_G | FILE_H;
 
-    
     pub const RANK_1: u64 = RANK_MASKS[7];
     pub const RANK_2: u64 = RANK_MASKS[6];
     pub const RANK_7: u64 = RANK_MASKS[1];
     pub const RANK_8: u64 = RANK_MASKS[0];
-    
-    
 
     pub const VBORDER_MASK: u64 = FILE_A | FILE_H;
 
@@ -127,7 +122,7 @@ const KING_OFFSETS: [(i8, u64); 8] = [
 ];
 
 #[rustfmt::skip]
-const BISHOP_RELEVANT_BITS: [u8; 64] = [
+pub const BISHOP_RELEVANT_BITS: [u8; 64] = [
     6, 5, 5, 5, 5, 5, 5, 6, 
     5, 5, 5, 5, 5, 5, 5, 5, 
     5, 5, 7, 7, 7, 7, 5, 5, 
@@ -139,7 +134,7 @@ const BISHOP_RELEVANT_BITS: [u8; 64] = [
 ];
 
 #[rustfmt::skip]
-const ROOK_RELEVANT_BITS: [u8; 64] = [
+pub const ROOK_RELEVANT_BITS: [u8; 64] = [
     12, 11, 11, 11, 11, 11, 11, 12, 
     11, 10, 10, 10, 10, 10, 10, 11, 
     11, 10, 10, 10, 10, 10, 10, 11, 
@@ -150,7 +145,7 @@ const ROOK_RELEVANT_BITS: [u8; 64] = [
     12, 11, 11, 11, 11, 11, 11, 12,
 ];
 
-const BISHOP_MAGICS: [u64; 64] = [
+pub const BISHOP_MAGICS: [u64; 64] = [
     0x40040844404084,
     0x2004208A004208,
     0x10190041080202,
@@ -217,7 +212,7 @@ const BISHOP_MAGICS: [u64; 64] = [
     0x4010011029020020,
 ];
 
-const ROOK_MAGICS: [u64; 64] = [
+pub const ROOK_MAGICS: [u64; 64] = [
     0x8A80104000800020,
     0x140002000100040,
     0x2801880A0017001,
@@ -326,11 +321,11 @@ fn generate_slider_attacks(square: u8, slider_mask: u64, occupancy: u64) -> u64 
     forward & slider_mask
 }
 
-fn mask_slider_attacks(square: u8, slider_mask: u64) -> u64 {
+pub fn mask_slider_attacks(square: u8, slider_mask: u64) -> u64 {
     generate_slider_attacks(square, slider_mask, 0)
 }
 
-fn mask_bishop_attacks(square: u8) -> u64 {
+pub fn mask_bishop_attacks(square: u8) -> u64 {
     let (rank, file) = (square >> 3, square & 7);
 
     mask_slider_attacks(
@@ -342,7 +337,7 @@ fn mask_bishop_attacks(square: u8) -> u64 {
     )
 }
 
-fn mask_rook_attacks(square: u8) -> u64 {
+pub fn mask_rook_attacks(square: u8) -> u64 {
     // Use the same line-attack helper for rank and file
     mask_slider_attacks(
         square,
@@ -354,7 +349,7 @@ fn mask_rook_attacks(square: u8) -> u64 {
 }
 
 /// Generates bishop attacks by combining diagonal and anti-diagonal lines.
-fn generate_bishop_attacks(square: u8, occupancy: u64) -> u64 {
+pub fn generate_bishop_attacks(square: u8, occupancy: u64) -> u64 {
     let (rank, file) = (square >> 3, square & 7);
 
     // Just call the line-attack helper for each relevant mask
@@ -370,13 +365,13 @@ fn generate_bishop_attacks(square: u8, occupancy: u64) -> u64 {
 }
 
 /// Generates rook attacks by combining rank and file lines.
-fn generate_rook_attacks(square: u8, occupancy: u64) -> u64 {
+pub fn generate_rook_attacks(square: u8, occupancy: u64) -> u64 {
     // Use the same line-attack helper for rank and file
     generate_slider_attacks(square, masks::RANK_MASKS[(square >> 3) as usize], occupancy)
         | generate_slider_attacks(square, masks::FILE_MASKS[(square & 7) as usize], occupancy)
 }
 
-fn create_occupancy(index: usize, mask: u64, bits: u8) -> u64 {
+pub fn create_occupancy(index: usize, mask: u64, bits: u8) -> u64 {
     let mut copy = mask;
     (0..bits).fold(0, |mut occupancy, count| {
         let square = get_lsb!(copy);
@@ -409,75 +404,6 @@ fn init_slider_attacks(masks: [u64; 64], is_bishop: bool) -> [Box<[u64]>; 64] {
         });
         attacks.into()
     })
-}
-
-#[allow(dead_code)]
-fn find_magic_number(rng: &mut MagicPRNG, square: u8, is_bishop: bool) -> Result<u64, &str> {
-    let (mask, bits) = if is_bishop {
-        (
-            mask_bishop_attacks(square),
-            BISHOP_RELEVANT_BITS[square as usize],
-        )
-    } else {
-        (
-            mask_rook_attacks(square),
-            ROOK_RELEVANT_BITS[square as usize],
-        )
-    };
-    let variations = 1 << bits;
-    let mut occupancies = vec![0; variations];
-    let mut attacks = vec![0; variations];
-    (0..variations).for_each(|index| {
-        occupancies[index] = create_occupancy(index, mask, bits);
-        attacks[index] = if is_bishop {
-            generate_bishop_attacks(square, occupancies[index])
-        } else {
-            generate_rook_attacks(square, occupancies[index])
-        };
-    });
-    for _ in 0..1_000_000_000 {
-        let magic = rng.rand_magic();
-
-        if count_bits!((mask.wrapping_mul(magic)) & 0xFF00000000000000) < 6 {
-            continue;
-        };
-
-        let mut used = vec![0; variations];
-
-        let mut fail = false;
-        for index in 0..variations {
-            let magic_index = ((occupancies[index].wrapping_mul(magic)) >> (64 - bits)) as usize;
-            if used[magic_index] == 0 {
-                used[magic_index] = attacks[index];
-            }
-            if used[magic_index] != attacks[index] {
-                fail = true;
-                break;
-            }
-        }
-        if !fail {
-            println!("{:#X},", magic);
-            return Ok(magic);
-        }
-    }
-
-    Err("failed to find magic number")
-}
-
-#[allow(dead_code)]
-fn find_magic_numbers() {
-    let mut rng = MagicPRNG::new();
-    let now = Instant::now();
-    println!("Rook magics:");
-    (0..64).for_each(|square| {
-        find_magic_number(&mut rng, square, false).unwrap();
-    });
-    println!();
-    println!("Bishop magics:");
-    (0..64).for_each(|square| {
-        find_magic_number(&mut rng, square, true).unwrap();
-    });
-    println!("Total time: {:?}", now.elapsed());
 }
 
 pub struct AttackTable {
@@ -568,7 +494,8 @@ impl AttackTable {
 
 #[cfg(test)]
 mod tests {
-    use crate::consts::Square;
+
+    use crate::engine::board::Square;
 
     use super::*;
 

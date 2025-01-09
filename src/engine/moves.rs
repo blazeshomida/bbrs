@@ -1,51 +1,4 @@
-#[macro_export]
-macro_rules! bitboard {
-    ($square:expr) => {
-        1u64 << $square
-    };
-}
-
-#[macro_export]
-macro_rules! get_bit {
-    ($bitboard:expr, $square:expr) => {
-        ($bitboard >> $square) & 1 != 0
-    };
-}
-
-#[macro_export]
-macro_rules! set_bit {
-    ($bitboard:expr, $square:expr) => {
-        $bitboard |= 1 << $square
-    };
-}
-
-#[macro_export]
-macro_rules! clear_bit {
-    ($bitboard:expr, $square:expr) => {
-        $bitboard &= !(1 << $square)
-    };
-}
-
-#[macro_export]
-macro_rules! count_bits {
-    ($bitboard:expr) => {
-        $bitboard.count_ones()
-    };
-}
-
-#[macro_export]
-macro_rules! get_lsb {
-    ($bitboard:expr) => {
-        $bitboard.trailing_zeros()
-    };
-}
-
-#[macro_export]
-macro_rules! clear_lsb {
-    ($bitboard:expr) => {
-        $bitboard &= ($bitboard - 1)
-    };
-}
+use crate::engine::{board::index_to_algebraic, ASCII_PIECES};
 
 /// Encodes a chess move into a 32-bit integer.
 /// - `encode_move!(source, target, piece, promotion, flags)`
@@ -81,4 +34,27 @@ macro_rules! decode_move {
             ),
         )
     };
+}
+
+pub mod flags {
+    pub const CAPTURE: u8 = 1 << 0;
+    pub const DOUBLE: u8 = 1 << 1;
+    pub const EN_PASSANT: u8 = 1 << 2;
+    pub const CASTLE: u8 = 1 << 3;
+}
+
+pub fn format(move_: u32) -> String {
+    let (source, target, _, promotion, _) = decode_move!(move_);
+    let suffix = if promotion != 0 {
+        format!("{}", ASCII_PIECES[promotion as usize])
+    } else {
+        String::new()
+    };
+
+    format!(
+        "{}{}{}",
+        index_to_algebraic(source as usize),
+        index_to_algebraic(target as usize),
+        suffix
+    )
 }
