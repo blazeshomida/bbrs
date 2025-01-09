@@ -7,7 +7,7 @@ use piece::{pieces::*, side};
 #[macro_use]
 mod bits;
 #[macro_use]
-mod moves;
+pub mod moves;
 
 mod attacks;
 mod board;
@@ -43,7 +43,10 @@ pub struct Engine {
     pub history: Vec<HistoryItem>,
     search_ply: u8,
     search_nodes: u64,
-    best_move: Option<u32>,
+    killer_moves: [[u32; 64]; 2],
+    history_moves: [[u32; 64]; 12],
+    pv_length: [u32; 64],
+    pv_table: [[u32; 64]; 64],
 }
 
 impl Engine {
@@ -55,7 +58,10 @@ impl Engine {
             history: vec![],
             search_ply: 0,
             search_nodes: 0,
-            best_move: None,
+            killer_moves: [[0; 64]; 2],
+            history_moves: [[0; 64]; 12],
+            pv_length: [0; 64],
+            pv_table: [[0; 64]; 64],
         })
     }
 
@@ -352,6 +358,19 @@ impl Engine {
         }
     }
 
+    fn get_piece(&self, side: u8, target: u8) -> Option<u8> {
+        let board = self.state.bitboards[side::range(side)]
+            .iter()
+            .enumerate()
+            .find(|(_, &bitboard)| get_bit!(bitboard, target));
+        if let Some((index, _)) = board {
+            let captured = index + (side as usize * 6);
+            Some(captured as u8)
+        } else {
+            None
+        }
+    }
+
     pub fn make_move(&mut self, move_: u32) -> bool {
         let mut history_item = HistoryItem {
             move_,
@@ -365,14 +384,9 @@ impl Engine {
         set_bit!(self.state.bitboards[piece as usize], target);
         let (capture, double, en_passant, castle) = flags;
         if capture {
-            let board = self.state.bitboards[side::range(self.state.side ^ 1)]
-                .iter()
-                .enumerate()
-                .find(|(_, &bitboard)| get_bit!(bitboard, target));
-            if let Some((index, _)) = board {
-                let captured = index + ((self.state.side ^ 1) as usize * 6);
-                history_item.captured = captured as u8;
-                clear_bit!(self.state.bitboards[captured], target);
+            if let Some(captured) = self.get_piece(self.state.side ^ 1, target) {
+                history_item.captured = captured;
+                clear_bit!(self.state.bitboards[captured as usize], target);
             };
         };
 
@@ -556,7 +570,7 @@ impl Engine {
         }
     }
 
-    fn calculate_positional_score(&self, piece: u8, square: u8) -> i8 {
+    fn get_positional_score(&self, piece: u8, square: u8) -> i8 {
         let piece_side = piece / 6;
         let piece_type = piece % 6;
         let index = if piece_side == side::WHITE {
@@ -579,6 +593,35 @@ impl Engine {
         }
     }
 
+    pub fn get_mvv_lva(&self, attacker: u8, victim: u8) -> i32 {
+        let attacker_value = 5 - (attacker as i32 % 6);
+        let victim_value = 1 + (victim as i32 % 6);
+        victim_value * 100 + attacker_value
+    }
+
+    pub fn score_move(&self, move_: u32) -> i32 {
+        let (_, target, source_piece, _, (capture, _, _, _)) = decode_move!(move_);
+        if capture {
+            let target_piece = self.get_piece(self.state.side ^ 1, target).unwrap_or(0);
+            return self.get_mvv_lva(source_piece, target_piece) + 10_000;
+        }
+        let ply_index = self.search_ply as usize;
+        if self.killer_moves[0][ply_index] == move_ {
+            return 9_000;
+        }
+        if self.killer_moves[1][ply_index] == move_ {
+            return 8_000;
+        }
+        let history_move = self.history_moves[source_piece as usize][target as usize];
+        history_move as i32
+    }
+
+    pub fn sort_moves(&self, moves: &[u32]) -> Vec<u32> {
+        let mut moves = moves.to_vec(); // Convert slice to Vec for sorting
+        moves.sort_by(|&a, &b| self.score_move(b).cmp(&self.score_move(a)));
+        moves
+    }
+
     fn generate_captures(&self) -> Vec<u32> {
         self.generate_moves()
             .into_iter()
@@ -588,6 +631,7 @@ impl Engine {
             })
             .collect()
     }
+
     pub fn evaluate(&mut self) -> i32 {
         let mut score = 0;
         self.state
@@ -600,7 +644,8 @@ impl Engine {
                 while copy != 0 {
                     let square = get_lsb!(copy);
                     score += evaluate::MATERIAL_SCORES[piece as usize];
-                    score += self.calculate_positional_score(piece, square as u8) as i32;
+                    score += self.get_positional_score(piece, square as u8) as i32;
+
                     clear_lsb!(copy);
                 }
             });
@@ -624,7 +669,7 @@ impl Engine {
             alpha = score;
         }
 
-        for &move_ in self.generate_captures().iter() {
+        for &move_ in self.sort_moves(&self.generate_captures()).iter() {
             if !self.make_move(move_) {
                 continue;
             }
@@ -647,16 +692,30 @@ impl Engine {
     }
 
     pub fn negamax(&mut self, depth: u8, mut alpha: i32, beta: i32) -> i32 {
+        let mut depth = depth;
+        let ply_index = self.search_ply as usize;
+        self.pv_length[ply_index] = ply_index as u32;
         if depth == 0 {
             return self.quiescence(alpha, beta);
         }
 
+        let king = if self.state.side == side::WHITE {
+            WHITE_KING
+        } else {
+            BLACK_KING
+        };
+        let in_check = self.is_square_attacked(
+            get_lsb!(self.state.bitboards[king as usize]) as usize,
+            self.state.side,
+        );
+        if in_check {
+            depth += 1;
+        }
+
         self.search_nodes += 1;
-        let mut best_so_far = None;
-        let old_alpha = alpha;
         let mut legal_moves = 0;
 
-        for &move_ in self.generate_moves().iter() {
+        for &move_ in self.sort_moves(&self.generate_moves()).iter() {
             if !self.make_move(move_) {
                 continue;
             }
@@ -667,40 +726,36 @@ impl Engine {
             let score = -self.negamax(depth - 1, -beta, -alpha);
             self.take_back();
             self.search_ply -= 1;
+            let (_, target, source_piece, _, (capture, _, _, _)) = decode_move!(move_);
 
             if score >= beta {
+                if !capture {
+                    self.killer_moves[1][ply_index] = self.killer_moves[0][ply_index];
+                    self.killer_moves[0][ply_index] = move_;
+                }
                 return beta; // Beta cutoff
             }
 
             if score > alpha {
                 alpha = score;
-                if self.search_ply == 0 {
-                    best_so_far = Some(move_);
+                if !capture {
+                    self.history_moves[source_piece as usize][target as usize] += depth as u32;
                 }
+                self.pv_table[ply_index][ply_index] = move_;
+                for next_ply in (ply_index + 1)..self.pv_length[ply_index + 1] as usize {
+                    self.pv_table[ply_index][next_ply] = self.pv_table[ply_index + 1][next_ply];
+                }
+                self.pv_length[ply_index] = self.pv_length[ply_index + 1];
             }
         }
 
         // Handle checkmate and stalemate
         if legal_moves == 0 {
-            let king = if self.state.side == side::WHITE {
-                WHITE_KING
-            } else {
-                BLACK_KING
-            };
-
-            if self.is_square_attacked(
-                get_lsb!(self.state.bitboards[king as usize]) as usize,
-                self.state.side,
-            ) {
+            if in_check {
                 return -evaluate::MATE_SCORE + self.search_ply as i32; // Checkmate
             } else {
                 return 0; // Stalemate
             }
-        }
-
-        // Update the best move at the root node
-        if old_alpha != alpha && self.search_ply == 0 {
-            self.best_move = best_so_far;
         }
 
         alpha
@@ -709,20 +764,27 @@ impl Engine {
     pub fn search_position(&mut self, depth: u8) {
         self.search_ply = 0;
         self.search_nodes = 0;
-        self.best_move = None;
         let start = Instant::now();
         let score = self.negamax(depth, -evaluate::MAX_SCORE, evaluate::MAX_SCORE);
         let elapsed = start.elapsed();
-        if let Some(move_) = self.best_move {
-            println!(
-                "info score cp {} depth {} nodes {} nps {:.3}",
-                score,
-                depth,
-                self.search_nodes,
-                self.search_nodes as f64 / elapsed.as_secs_f64()
-            );
-            println!("bestmove {}", moves::format(move_));
-        }
+        let pv_line = self.pv_table[0]
+            .into_iter()
+            .take(self.pv_length[0] as usize)
+            .collect::<Vec<u32>>();
+        println!(
+            "info score cp {} depth {} time {:.0} nodes {} nps {:.3} pv {} ",
+            score,
+            depth,
+            elapsed.as_millis(),
+            self.search_nodes,
+            self.search_nodes / elapsed.as_secs(),
+            pv_line
+                .iter()
+                .map(|&move_| moves::format(move_))
+                .collect::<Vec<String>>()
+                .join(" "),
+        );
+        println!("bestmove {}", moves::format(pv_line[0]));
     }
 
     pub fn perft_driver(&mut self, depth: u8) -> u64 {
@@ -817,6 +879,36 @@ impl Engine {
             println!();
         }
         println!("  a b c d e f g h");
+    }
+
+    pub fn print_move_scores(&self, sort: bool) {
+        let print_divider = || {
+            println!("{}", "─".repeat(25));
+        };
+        let print_headers = || {
+            println!("{:>5} │ {:<6} │ {:<7}", "No.", "Move", "Score");
+        };
+        print_divider();
+        println!("  Move Scores:");
+        print_divider();
+        print_headers();
+        print_divider();
+        let moves = self.generate_moves();
+        let moves = if sort { self.sort_moves(&moves) } else { moves };
+        for (index, &move_) in moves.iter().enumerate() {
+            let score = self.score_move(move_);
+            println!(
+                "{:>5} │ {:<6} │ {:<7}",
+                index + 1,
+                moves::format(move_),
+                score
+            );
+        }
+        print_divider();
+        print_headers();
+        print_divider();
+        println!("  Total moves: {}", moves.len());
+        print_divider();
     }
 
     pub fn print(&self) {

@@ -2,9 +2,17 @@
 name = "bbrs"
 version = "0.1.0"
 edition = "2021"
+default-run = "bbrs"
 
 [dependencies]
+
+
+[[bin]]
+name = "bbrs"
+path = "src/main.rs"
 
 [lib]
 name = "bbrs"
 path = "src/lib.rs"
+
+
