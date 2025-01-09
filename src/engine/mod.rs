@@ -507,7 +507,7 @@ impl Engine {
         self.state.full_moves = self.state.half_moves / 2 + 1
     }
 
-    pub fn parse_move(&mut self, move_: String) -> Option<u32> {
+    pub fn parse_move(&mut self, move_: &str) -> Option<u32> {
         let mut chars = move_.chars();
         let source = algebraic_to_index(chars.by_ref().take(2).collect::<String>().as_str());
         let target = algebraic_to_index(chars.by_ref().take(2).collect::<String>().as_str());
@@ -534,10 +534,10 @@ impl Engine {
         None
     }
 
-    pub fn load_moves(&mut self, moves: Vec<String>) {
+    pub fn load_moves(&mut self, moves: Vec<&str>) {
         self.history.clear();
         for move_ in moves {
-            if let Some(move_) = self.parse_move(move_.clone()) {
+            if let Some(move_) = self.parse_move(move_) {
                 self.make_move(move_);
                 self.print();
             } else {

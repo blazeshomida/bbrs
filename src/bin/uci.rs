@@ -3,12 +3,12 @@ use std::io::{self, BufRead};
 extern crate bbrs;
 use std::process::{self, Command};
 
-enum UCICommand {
+enum UCICommand<'a> {
     Uci,
     IsReady,
     Position {
         fen: Option<String>,
-        moves: Vec<String>,
+        moves: Vec<&'a str>,
     },
     Go {
         depth: Option<u32>,
@@ -37,7 +37,7 @@ fn parse_position(input: &str) -> UCICommand {
     };
 
     let moves = if tokens.next() == Some("moves") {
-        tokens.map(String::from).collect()
+        tokens.collect()
     } else {
         vec![]
     };
