@@ -764,6 +764,10 @@ impl Engine {
     pub fn search_position(&mut self, depth: u8) {
         self.search_ply = 0;
         self.search_nodes = 0;
+        self.pv_length = [0; 64];
+        self.pv_table = [[0; 64]; 64];
+        self.killer_moves = [[0; 64]; 2];
+        self.history_moves = [[0; 64]; 12];
         let start = Instant::now();
         let score = self.negamax(depth, -evaluate::MAX_SCORE, evaluate::MAX_SCORE);
         let elapsed = start.elapsed();

@@ -97,8 +97,7 @@ fn main() {
                 engine.load_moves(moves);
             }
             UCICommand::Go { depth } => {
-                println!("info depth {}", depth.unwrap_or(1));
-                println!("bestmove e2e4");
+                engine.search_position(depth.unwrap_or(6) as u8);
                 println!()
             }
             UCICommand::Perft { depth } => {
