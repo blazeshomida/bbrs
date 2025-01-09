@@ -66,3 +66,6 @@ pub const KING_SCORE: [i8; 64] = [
      0,   5,   5,  -5,  -5,   0,   5,   0,
      0,   0,   5,   0, -15,   0,  10,   0,
 ];
+
+pub const MAX_SCORE: i32 = 50_000;
+pub const MATE_SCORE: i32 = MAX_SCORE - 1_000;

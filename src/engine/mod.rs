@@ -41,6 +41,9 @@ pub struct Engine {
     attack_table: AttackTable,
     pub state: EngineState,
     pub history: Vec<HistoryItem>,
+    search_ply: u8,
+    search_nodes: u64,
+    best_move: Option<u32>,
 }
 
 impl Engine {
@@ -50,6 +53,9 @@ impl Engine {
             attack_table: AttackTable::init(),
             state,
             history: vec![],
+            search_ply: 0,
+            search_nodes: 0,
+            best_move: None,
         })
     }
 
@@ -573,6 +579,15 @@ impl Engine {
         }
     }
 
+    fn generate_captures(&self) -> Vec<u32> {
+        self.generate_moves()
+            .into_iter()
+            .filter(|&move_| {
+                let (_, _, _, _, (capture, _, _, _)) = decode_move!(move_);
+                capture
+            })
+            .collect()
+    }
     pub fn evaluate(&mut self) -> i32 {
         let mut score = 0;
         self.state
@@ -597,7 +612,118 @@ impl Engine {
         }
     }
 
-    pub fn search_position(&mut self, depth: u8) {}
+    pub fn quiescence(&mut self, alpha: i32, beta: i32) -> i32 {
+        self.search_nodes += 1;
+        let mut alpha = alpha;
+        let score = self.evaluate();
+        if score >= beta {
+            return beta; // Beta cutoff
+        }
+
+        if score > alpha {
+            alpha = score;
+        }
+
+        for &move_ in self.generate_captures().iter() {
+            if !self.make_move(move_) {
+                continue;
+            }
+
+            self.search_ply += 1;
+
+            let score = -self.quiescence(-beta, -alpha);
+            self.take_back();
+            self.search_ply -= 1;
+
+            if score >= beta {
+                return beta; // Beta cutoff
+            }
+
+            if score > alpha {
+                alpha = score;
+            }
+        }
+        alpha
+    }
+
+    pub fn negamax(&mut self, depth: u8, mut alpha: i32, beta: i32) -> i32 {
+        if depth == 0 {
+            return self.quiescence(alpha, beta);
+        }
+
+        self.search_nodes += 1;
+        let mut best_so_far = None;
+        let old_alpha = alpha;
+        let mut legal_moves = 0;
+
+        for &move_ in self.generate_moves().iter() {
+            if !self.make_move(move_) {
+                continue;
+            }
+
+            self.search_ply += 1;
+            legal_moves += 1;
+
+            let score = -self.negamax(depth - 1, -beta, -alpha);
+            self.take_back();
+            self.search_ply -= 1;
+
+            if score >= beta {
+                return beta; // Beta cutoff
+            }
+
+            if score > alpha {
+                alpha = score;
+                if self.search_ply == 0 {
+                    best_so_far = Some(move_);
+                }
+            }
+        }
+
+        // Handle checkmate and stalemate
+        if legal_moves == 0 {
+            let king = if self.state.side == side::WHITE {
+                WHITE_KING
+            } else {
+                BLACK_KING
+            };
+
+            if self.is_square_attacked(
+                get_lsb!(self.state.bitboards[king as usize]) as usize,
+                self.state.side,
+            ) {
+                return -evaluate::MATE_SCORE + self.search_ply as i32; // Checkmate
+            } else {
+                return 0; // Stalemate
+            }
+        }
+
+        // Update the best move at the root node
+        if old_alpha != alpha && self.search_ply == 0 {
+            self.best_move = best_so_far;
+        }
+
+        alpha
+    }
+
+    pub fn search_position(&mut self, depth: u8) {
+        self.search_ply = 0;
+        self.search_nodes = 0;
+        self.best_move = None;
+        let start = Instant::now();
+        let score = self.negamax(depth, -evaluate::MAX_SCORE, evaluate::MAX_SCORE);
+        let elapsed = start.elapsed();
+        if let Some(move_) = self.best_move {
+            println!(
+                "info score cp {} depth {} nodes {} nps {:.3}",
+                score,
+                depth,
+                self.search_nodes,
+                self.search_nodes as f64 / elapsed.as_secs_f64()
+            );
+            println!("bestmove {}", moves::format(move_));
+        }
+    }
 
     pub fn perft_driver(&mut self, depth: u8) -> u64 {
         let mut nodes = 0;
