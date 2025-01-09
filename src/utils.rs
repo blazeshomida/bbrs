@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+#[allow(dead_code)]
 /// Pauses execution until any key is pressed.
 pub fn pause() {
     println!("Press any key to continue...");
@@ -15,6 +16,7 @@ pub fn pause() {
     io::stdin().read_exact(&mut buffer).unwrap();
 }
 
+#[allow(dead_code)]
 /// Sleeps for a specified number of milliseconds.
 pub fn sleep(ms: u64) {
     thread::sleep(Duration::from_millis(ms));

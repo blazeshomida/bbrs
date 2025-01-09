@@ -514,48 +514,48 @@ mod tests {
     #[test]
     fn test_mask_pawn_attacks() {
         // White pawn on e5 (square 28)
-        assert_eq!(mask_pawn_attacks(Square::e5 as u8, 0), 0x280000);
+        assert_eq!(mask_pawn_attacks(Square::E5 as u8, 0), 0x280000);
 
         // Black pawn on e4 (square 36)
-        assert_eq!(mask_pawn_attacks(Square::e4 as u8, 1), 0x280000000000);
+        assert_eq!(mask_pawn_attacks(Square::E4 as u8, 1), 0x280000000000);
     }
 
     #[test]
     fn test_mask_knight_attacks() {
         // Knight on b8 (square 1)
-        assert_eq!(mask_knight_attacks(Square::b8 as u8), 0x50800);
+        assert_eq!(mask_knight_attacks(Square::B8 as u8), 0x50800);
     }
 
     #[test]
     fn test_mask_king_attacks() {
         // King on e5 (square 28)
-        assert_eq!(mask_king_attacks(Square::e5 as u8), 0x3828380000);
+        assert_eq!(mask_king_attacks(Square::E5 as u8), 0x3828380000);
     }
 
     #[test]
     fn test_mask_bishop_attacks() {
         // Bishop on d5 (square 27)
-        assert_eq!(mask_bishop_attacks(Square::d5 as u8), 0x40221400142200);
+        assert_eq!(mask_bishop_attacks(Square::D5 as u8), 0x40221400142200);
     }
 
     #[test]
     fn test_mask_rook_attacks() {
         // Rook on d5 (square 27)
-        assert_eq!(mask_rook_attacks(Square::d5 as u8), 0x8080876080800);
+        assert_eq!(mask_rook_attacks(Square::D5 as u8), 0x8080876080800);
     }
 
     #[test]
     fn test_generate_bishop_attacks() {
         // Bishop on a8 (square 0)
         assert_eq!(
-            generate_bishop_attacks(Square::a8 as u8, 0),
+            generate_bishop_attacks(Square::A8 as u8, 0),
             0x8040201008040200
         );
 
-        let occupancy = bitboard!(Square::e4 as u8);
+        let occupancy = bitboard!(Square::E4 as u8);
         // Bishop on a8 (square 0) with occupancy of e4 (square 36)
         assert_eq!(
-            generate_bishop_attacks(Square::a8 as u8, occupancy),
+            generate_bishop_attacks(Square::A8 as u8, occupancy),
             0x1008040200
         );
     }
@@ -564,14 +564,14 @@ mod tests {
     fn test_generate_rook_attacks() {
         // Rook on a8 (square 0)
         assert_eq!(
-            generate_rook_attacks(Square::a8 as u8, 0),
+            generate_rook_attacks(Square::A8 as u8, 0),
             0x1010101010101FE
         );
 
-        let occupancy = bitboard!(Square::a3 as u8);
+        let occupancy = bitboard!(Square::A3 as u8);
         // Rook on a8 (square 0) with occupancy of a3 (square 40)
         assert_eq!(
-            generate_rook_attacks(Square::a8 as u8, occupancy),
+            generate_rook_attacks(Square::A8 as u8, occupancy),
             0x101010101FE
         );
     }

@@ -5,7 +5,7 @@ use super::{
     EngineState,
 };
 
-fn parse_piece(fen: char) -> Option<u8> {
+pub fn parse_piece(fen: char) -> Option<u8> {
     match fen {
         'P' => Some(WHITE_PAWN),
         'N' => Some(WHITE_KNIGHT),

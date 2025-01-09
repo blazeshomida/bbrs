@@ -1,7 +1,7 @@
 use std::{ops::Range, time::Instant};
 
 use attacks::{masks, AttackTable};
-use board::{index_to_algebraic, Square};
+use board::{algebraic_to_index, index_to_algebraic, Square};
 use piece::{pieces::*, side};
 
 #[macro_use]
@@ -53,7 +53,10 @@ impl Engine {
     }
 
     pub fn set_position<'a>(&mut self, fen: &'a str) -> Result<(), &'a str> {
+        self.history.clear();
         self.state = fen::parse(fen)?;
+        self.print();
+        println!();
         Ok(())
     }
 
@@ -245,21 +248,21 @@ impl Engine {
                         queen_mask,
                     ) = if side == side::WHITE {
                         (
-                            Square::e1,
-                            Square::g1,
-                            Square::c1,
-                            [Square::f1, Square::g1],
-                            [Square::d1, Square::c1, Square::b1],
+                            Square::E1,
+                            Square::G1,
+                            Square::C1,
+                            [Square::F1, Square::G1],
+                            [Square::D1, Square::C1, Square::B1],
                             castling::flags::WK,
                             castling::flags::WQ,
                         )
                     } else {
                         (
-                            Square::e8,
-                            Square::g8,
-                            Square::c8,
-                            [Square::f8, Square::g8],
-                            [Square::d8, Square::c8, Square::b8],
+                            Square::E8,
+                            Square::G8,
+                            Square::C8,
+                            [Square::F8, Square::G8],
+                            [Square::D8, Square::C8, Square::B8],
                             castling::flags::BK,
                             castling::flags::BQ,
                         )
@@ -394,18 +397,18 @@ impl Engine {
                 if self.state.side == side::WHITE {
                     (
                         WHITE_ROOK as usize,
-                        Square::g1,
-                        Square::c1,
-                        (Square::h1, Square::f1),
-                        (Square::a1, Square::d1),
+                        Square::G1,
+                        Square::C1,
+                        (Square::H1, Square::F1),
+                        (Square::A1, Square::D1),
                     )
                 } else {
                     (
                         BLACK_ROOK as usize,
-                        Square::g8,
-                        Square::c8,
-                        (Square::h8, Square::f8),
-                        (Square::a8, Square::d8),
+                        Square::G8,
+                        Square::C8,
+                        (Square::H8, Square::F8),
+                        (Square::A8, Square::D8),
                     )
                 };
             if target == king_target as u8 {
@@ -472,18 +475,18 @@ impl Engine {
                 if side == side::WHITE {
                     (
                         WHITE_ROOK as usize,
-                        Square::g1,
-                        Square::c1,
-                        (Square::h1, Square::f1),
-                        (Square::a1, Square::d1),
+                        Square::G1,
+                        Square::C1,
+                        (Square::H1, Square::F1),
+                        (Square::A1, Square::D1),
                     )
                 } else {
                     (
                         BLACK_ROOK as usize,
-                        Square::g8,
-                        Square::c8,
-                        (Square::h8, Square::f8),
-                        (Square::a8, Square::d8),
+                        Square::G8,
+                        Square::C8,
+                        (Square::H8, Square::F8),
+                        (Square::A8, Square::D8),
                     )
                 };
             if target == king_target as u8 {
@@ -504,6 +507,46 @@ impl Engine {
         self.state.full_moves = self.state.half_moves / 2 + 1
     }
 
+    pub fn parse_move(&mut self, move_: String) -> Option<u32> {
+        let mut chars = move_.chars();
+        let source = algebraic_to_index(chars.by_ref().take(2).collect::<String>().as_str());
+        let target = algebraic_to_index(chars.by_ref().take(2).collect::<String>().as_str());
+        let piece = if let Some(piece) = chars.next() {
+            fen::parse_piece(piece)
+        } else {
+            None
+        };
+        let moves = self.generate_moves();
+        for &move_ in moves.iter() {
+            let (source_, target_, piece_, _, _) = decode_move!(move_);
+            if source == source_ && target == target_ {
+                if let Some(piece) = piece {
+                    if piece == piece_ {
+                        return Some(move_);
+                    } else {
+                        continue;
+                    }
+                }
+
+                return Some(move_);
+            }
+        }
+        None
+    }
+
+    pub fn load_moves(&mut self, moves: Vec<String>) {
+        self.history.clear();
+        for move_ in moves {
+            if let Some(move_) = self.parse_move(move_.clone()) {
+                self.make_move(move_);
+                self.print();
+            } else {
+                println!("Invalid move: {}", move_);
+                return;
+            }
+            println!();
+        }
+    }
     pub fn perft_driver(&mut self, depth: u8) -> u64 {
         let mut nodes = 0;
         if depth == 0 {

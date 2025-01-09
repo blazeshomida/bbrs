@@ -1,5 +1,6 @@
 use crate::engine::{moves, ASCII_PIECES};
 
+#[allow(dead_code)]
 /// Print the bitboard for debugging.
 pub fn print_bitboard(bitboard: u64) {
     let divider = "-------------------";
@@ -25,6 +26,7 @@ pub fn print_bitboard(bitboard: u64) {
     println!("{}", divider);
 }
 
+#[allow(dead_code)]
 pub fn print_move_list(moves: &[u32]) {
     let print_divider = || {
         println!("{}", "─".repeat(65));
