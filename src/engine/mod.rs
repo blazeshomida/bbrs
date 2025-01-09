@@ -772,12 +772,12 @@ impl Engine {
             .take(self.pv_length[0] as usize)
             .collect::<Vec<u32>>();
         println!(
-            "info score cp {} depth {} time {:.0} nodes {} nps {:.3} pv {} ",
+            "info score cp {} depth {} time {:.0} nodes {} nps {:.0} pv {} ",
             score,
             depth,
             elapsed.as_millis(),
             self.search_nodes,
-            self.search_nodes / elapsed.as_secs(),
+            self.search_nodes as f64 / elapsed.as_secs_f64().max(1e-9),
             pv_line
                 .iter()
                 .map(|&move_| moves::format(move_))
