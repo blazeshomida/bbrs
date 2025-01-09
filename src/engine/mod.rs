@@ -13,6 +13,7 @@ mod attacks;
 mod board;
 mod castling;
 mod debug;
+mod evaluate;
 mod fen;
 mod magics;
 mod piece;
@@ -344,6 +345,7 @@ impl Engine {
             _ => castling & mask != 0,
         }
     }
+
     pub fn make_move(&mut self, move_: u32) -> bool {
         let mut history_item = HistoryItem {
             move_,
@@ -547,6 +549,56 @@ impl Engine {
             println!();
         }
     }
+
+    fn calculate_positional_score(&self, piece: u8, square: u8) -> i8 {
+        let piece_side = piece / 6;
+        let piece_type = piece % 6;
+        let index = if piece_side == side::WHITE {
+            square
+        } else {
+            square ^ 0x38
+        } as usize;
+        let score = match piece_type {
+            piece::types::PAWN => evaluate::PAWN_SCORE[index],
+            piece::types::KNIGHT => evaluate::KNIGHT_SCORE[index],
+            piece::types::BISHOP => evaluate::BISHOP_SCORE[index],
+            piece::types::ROOK => evaluate::ROOK_SCORE[index],
+            piece::types::KING => evaluate::KING_SCORE[index],
+            _ => 0,
+        };
+        if piece_side == side::WHITE {
+            score
+        } else {
+            -score
+        }
+    }
+
+    pub fn evaluate(&mut self) -> i32 {
+        let mut score = 0;
+        self.state
+            .bitboards
+            .iter()
+            .enumerate()
+            .for_each(|(piece, &bitboard)| {
+                let piece = piece as u8;
+                let mut copy = bitboard;
+                while copy != 0 {
+                    let square = get_lsb!(copy);
+                    score += evaluate::MATERIAL_SCORES[piece as usize];
+                    score += self.calculate_positional_score(piece, square as u8) as i32;
+                    clear_lsb!(copy);
+                }
+            });
+
+        if self.state.side == side::WHITE {
+            score
+        } else {
+            -score
+        }
+    }
+
+    pub fn search_position(&mut self, depth: u8) {}
+
     pub fn perft_driver(&mut self, depth: u8) -> u64 {
         let mut nodes = 0;
         if depth == 0 {
